@@ -1,0 +1,158 @@
+!py -m pip install -q "monai-weekly[nibabel, tqdm, einops]"
+!python -c "import matplotlib" || pip install -q matplotlib
+%matplotlib inline
+import os
+import shutil
+import tempfile
+
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+from monai.losses import DiceCELoss
+from monai.inferers import sliding_window_inference
+from monai.transforms import (
+    AsDiscrete,
+    EnsureChannelFirstd,
+    Compose,
+    CropForegroundd,
+    LoadImaged,
+    Orientationd,
+    RandFlipd,
+    RandCropByPosNegLabeld,
+    RandShiftIntensityd,
+    ScaleIntensityRanged,
+    Spacingd,
+    RandRotate90d,
+    ResizeWithPadOrCropd,
+    SpatialCrop
+)
+
+from monai.config import print_config
+from monai.metrics import DiceMetric
+from monai.networks.nets import UNETR,SwinUNETR,UNet
+
+from monai.data import (
+    CacheDataset,
+    DataLoader,
+    Dataset,
+    load_decathlon_datalist,
+    decollate_batch,
+)
+
+from monai.networks.layers import Norm
+import torch
+
+print_config()
+#image list
+img_files=[os.path.join(path[0],file) for path in os.walk(r'c://Users//nayak//Downloads//archive (1)//')  for file in path[-1]  if 'pt' in path[0] if 'vol' in file]  
+print(len(img_files))
+#segmentaim list
+seg_path=r'c:\\Users\\nayak\\Downloads\\archive (1)\\segmentations'
+
+
+seg_files=[seg_path+'\\segmentation-'+file.split('-')[-1] for file in img_files]  
+print(img_files[2],seg_files[2])
+#monai dataset need dictonary
+data_dicts = [{"image": image_name, "label": label_name} for image_name, label_name in zip(img_files, seg_files)]
+train_files, val_files = data_dicts[65:130], data_dicts[-1:]
+class ToLiver(object):
+    """Convert ndarrays in sample to Tensors."""
+
+    def __call__(self, sample):
+        image, label = sample['image'], sample['label']
+        label[label==2]=1
+        return {'image': image,
+                'label': label}
+train_transforms = Compose(
+    [
+        LoadImaged(keys=["image", "label"]),
+        EnsureChannelFirstd(keys=["image", "label"]),
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Spacingd(
+            keys=["image", "label"],
+            pixdim=(1.5, 1.5, 2.0),
+            mode=("bilinear", "nearest"),
+        ),
+        ScaleIntensityRanged(
+            keys=["image"],
+            a_min=-175,
+            a_max=250,
+            b_min=0.0,
+            b_max=1.0,
+            clip=True,
+        ),
+        CropForegroundd(keys=["image", "label"], source_key="image"),
+        RandCropByPosNegLabeld(
+            keys=["image", "label"],
+            label_key="label",
+            spatial_size=(128, 128, 32),
+            pos=1,
+            neg=1,
+            num_samples=4,
+            image_key="image",
+            image_threshold=0,
+        ),
+
+        RandFlipd(
+            keys=["image", "label"],
+            spatial_axis=[0],
+            prob=0.10,
+        ),
+        RandFlipd(
+            keys=["image", "label"],
+            spatial_axis=[1],
+            prob=0.10,
+        ),
+        RandFlipd(
+            keys=["image", "label"],
+            spatial_axis=[2],
+            prob=0.10,
+        ),
+        RandRotate90d(
+            keys=["image", "label"],
+            prob=0.10,
+            max_k=3,
+        ),
+      ToLiver()
+    ]
+)
+val_transforms = Compose(
+    [
+        LoadImaged(keys=["image", "label"]),
+        EnsureChannelFirstd(keys=["image", "label"]),
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Spacingd(
+            keys=["image", "label"],
+            pixdim=(1.5, 1.5, 2.0),
+            mode=("bilinear", "nearest"),
+        ),
+        ScaleIntensityRanged(keys=["image"], a_min=-175, a_max=250, b_min=0.0, b_max=1.0, clip=True),
+        CropForegroundd(keys=["image", "label"], source_key="image"),
+        ToLiver()
+    ]
+)
+#create data set with the transform for the train and val
+
+
+train_ds =CacheDataset(
+    data=train_files,
+    transform=train_transforms,
+)
+train_loader = DataLoader(train_ds, batch_size=1, shuffle=True)
+val_ds =CacheDataset(
+    data=val_files,
+    transform=val_transforms,
+)
+img = val_ds[0]["image"]
+label = val_ds[0]["label"]
+img_shape = img.shape
+label_shape = label.shape
+print(f"image shape: {img_shape}, label shape: {label_shape}")
+plt.figure("image", (18, 6))
+plt.subplot(1, 2, 1)
+plt.title("image")
+plt.imshow(img[ 0,:, :,40].detach().cpu(), cmap="gray")
+plt.subplot(1, 2, 2)
+plt.title("label")
+plt.imshow(label[0, :, :, 40].detach().cpu())
+plt.show()
